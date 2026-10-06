@@ -4,7 +4,6 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>Gold Engine (Deriv XAU/USD)</title>
-  <!-- Force exact version 4.1.1 to avoid caching issues -->
   <script src="https://unpkg.com/lightweight-charts@4.1.1/dist/lightweight-charts.standalone.production.js"></script>
   <style>
     :root {
@@ -163,7 +162,7 @@
 <body>
 
   <header>
-    <h1>Gold Engine (Deriv XAU/USD)</h1>
+    <h1>Gold Engine (Deriv)</h1>
     <span id="status">Connecting...</span>
   </header>
 
@@ -299,12 +298,11 @@
       derivWS.close();
     }
 
-    // Connect to Deriv Public App ID
-    derivWS = new WebSocket('wss://ws.binaryws.com/websockets/v3?app_id=1089');
+    // Using stable derivws.com endpoint
+    derivWS = new WebSocket('wss://ws.derivws.com/websockets/v3?app_id=1089');
 
     derivWS.onopen = () => {
       let granularity = tfConfig[tf];
-      // Subscribe to historical data + ongoing ticks
       derivWS.send(JSON.stringify({
         ticks_history: 'frxXAUUSD',
         adjust_start_time: 1,
@@ -320,13 +318,18 @@
       let data = JSON.parse(event.data);
 
       if (data.error) {
-        statusEl.innerText = 'Err: ' + data.error.message;
+        statusEl.innerText = 'API Err: ' + data.error.message;
         statusEl.className = 'error';
         return;
       }
 
-      // 1. Handle Initial Historical Candles
       if (data.msg_type === 'candles') {
+        if (!data.candles || data.candles.length === 0) {
+            statusEl.innerText = 'No Data Received';
+            statusEl.className = 'error';
+            return;
+        }
+
         candlesData = data.candles.map(c => ({
           time: c.epoch,
           open: parseFloat(c.open),
@@ -345,7 +348,6 @@
         statusEl.className = 'live';
       }
 
-      // 2. Handle Live Candle Updates
       if (data.msg_type === 'ohlc') {
         let c = data.ohlc;
         let liveCandle = {
@@ -358,7 +360,6 @@
         
         candleSeries.update(liveCandle);
         
-        // Ensure analysis updates with live price
         if (candlesData.length > 0) {
             if (candlesData[candlesData.length - 1].time === liveCandle.time) {
                 candlesData[candlesData.length - 1] = liveCandle;
@@ -371,8 +372,16 @@
     };
 
     derivWS.onerror = (err) => {
-      statusEl.innerText = 'Deriv Network Error';
+      statusEl.innerText = 'Deriv Network Error (Blocked)';
       statusEl.className = 'error';
+    };
+
+    derivWS.onclose = () => {
+      if(statusEl.className !== 'error') {
+         statusEl.innerText = 'Connection Dropped. Retrying...';
+         statusEl.className = 'error';
+         setTimeout(() => loadDerivData(currentTF), 3000); // Auto reconnect
+      }
     };
   }
 
@@ -389,7 +398,6 @@
     document.getElementById('bsl-val').innerText = maxHigh.toFixed(2);
     document.getElementById('ssl-val').innerText = minLow.toFixed(2);
 
-    // Calculate PA (Price Action) Buy/Sell Strength without Volume
     let totalBuyPressure = 0;
     let totalPressure = 0;
     let recentCandles = candles.slice(-20);
@@ -447,7 +455,6 @@
     });
   });
 
-  // Delay init slightly to ensure DOM is ready on mobile browsers
   setTimeout(() => {
     initChart();
     loadDerivData(currentTF);
