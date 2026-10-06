@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-  <title>Gold Engine (Deriv v3)</title>
+  <title>Gold Engine (v4 REST)</title>
   <script src="https://unpkg.com/lightweight-charts@4.1.1/dist/lightweight-charts.standalone.production.js"></script>
   <style>
     :root {
@@ -19,21 +19,11 @@
     }
     * { box-sizing: border-box; }
     html, body {
-      margin: 0;
-      padding: 0;
-      width: 100%;
-      height: 100%;
-      background: var(--bg);
-      color: var(--tx);
-      font-family: system-ui, -apple-system, sans-serif;
-      overflow-x: hidden;
+      margin: 0; padding: 0; width: 100%; height: 100%;
+      background: var(--bg); color: var(--tx);
+      font-family: system-ui, -apple-system, sans-serif; overflow-x: hidden;
     }
-    body {
-      display: flex;
-      flex-direction: column;
-      padding: 8px;
-      gap: 8px;
-    }
+    body { display: flex; flex-direction: column; padding: 8px; gap: 8px; }
     
     body.is-fullscreen { padding: 0; gap: 0; }
     body.is-fullscreen header,
@@ -98,16 +88,15 @@
 <body>
 
   <header>
-    <h1>Gold Engine (Deriv v3)</h1>
-    <span id="status">Initializing...</span>
+    <h1>Gold Engine (v4 REST)</h1>
+    <span id="status">Connecting...</span>
   </header>
 
   <div class="controls-panel">
     <div class="tf-group">
-      <button class="tf-btn" data-tf="1m">1M</button>
-      <button class="tf-btn active" data-tf="5m">5M</button>
-      <button class="tf-btn" data-tf="15m">15M</button>
       <button class="tf-btn" data-tf="1h">1H</button>
+      <button class="tf-btn active" data-tf="4h">4H</button>
+      <button class="tf-btn" data-tf="1d">1D</button>
     </div>
     <div class="action-group">
       <button id="toggle-fs" class="fs-btn">Fullscreen ⛶</button>
@@ -116,10 +105,9 @@
 
   <div id="chart-container">
     <div class="fs-overlay-controls">
-      <button class="tf-btn-fs" data-tf="1m">1m</button>
-      <button class="tf-btn-fs" data-tf="5m">5m</button>
-      <button class="tf-btn-fs" data-tf="15m">15m</button>
       <button class="tf-btn-fs" data-tf="1h">1h</button>
+      <button class="tf-btn-fs" data-tf="4h">4h</button>
+      <button class="tf-btn-fs" data-tf="1d">1d</button>
       <button id="exit-fs">Exit ✕</button>
     </div>
   </div>
@@ -127,7 +115,7 @@
   <div id="signal-box">
     <div style="display:flex; justify-content:space-between; align-items:center;">
       <span id="signal-title">WAIT</span>
-      <span id="signal-tf" style="font-size:12px; color:var(--mut);">5M Analysis</span>
+      <span id="signal-tf" style="font-size:12px; color:var(--mut);">4H Analysis</span>
     </div>
     <div id="signal-levels" style="margin-top:6px; font-size:13px; font-weight:500;"></div>
   </div>
@@ -149,8 +137,7 @@
   </div>
 
 <script>
-  let currentTF = '5m';
-  let derivWS = null;
+  let currentTF = '4h';
   let chart = null;
   let candleSeries = null;
   let ema20Series = null;
@@ -159,16 +146,6 @@
   
   const chartElement = document.getElementById('chart-container');
   const statusEl = document.getElementById('status');
-  const tfConfig = { '1m': 60, '5m': 300, '15m': 900, '1h': 3600 };
-
-  // Multiple Fallback URLs to bypass potential ISP Blocks
-  const wsEndpoints = [
-    'wss://ws.binaryws.com/websockets/v3?app_id=1089',
-    'wss://ws.derivws.com/websockets/v3?app_id=1089',
-    'wss://blue.binaryws.com/websockets/v3?app_id=1089'
-  ];
-  let currentEndpointIndex = 0;
-  let chartInitSuccess = false;
 
   function initChart() {
     try {
@@ -192,11 +169,9 @@
       window.addEventListener('resize', () => {
         chart.applyOptions({ width: chartElement.clientWidth, height: chartElement.clientHeight });
       });
-      chartInitSuccess = true;
     } catch (err) {
-      statusEl.innerText = "Chart Err (Device too old?)";
+      statusEl.innerText = "Chart Err";
       statusEl.className = 'error';
-      chartInitSuccess = false;
     }
   }
 
@@ -228,117 +203,50 @@
     return emaData;
   }
 
-  function connectToDeriv(tf) {
-    if (!chartInitSuccess) return; // Prevent overwriting chart error message
-    
-    if (currentEndpointIndex >= wsEndpoints.length) {
-       statusEl.innerText = 'Network Blocked (Try VPN)';
-       statusEl.className = 'error';
-       return;
-    }
-
-    let activeURL = wsEndpoints[currentEndpointIndex];
-    statusEl.innerText = `Connecting Server ${currentEndpointIndex + 1}...`;
+  async function loadData(tf) {
+    statusEl.innerText = 'Loading Gold Data...';
     statusEl.className = '';
-    
-    if (derivWS) derivWS.close();
 
     try {
-      derivWS = new WebSocket(activeURL);
-    } catch(e) {
-      handleConnectionFailure();
-      return;
-    }
-
-    let isConnectedSuccessfully = false;
-
-    derivWS.onopen = () => {
-      let granularity = tfConfig[tf];
-      derivWS.send(JSON.stringify({
-        ticks_history: 'frxXAUUSD',
-        adjust_start_time: 1,
-        count: 200,
-        end: 'latest',
-        style: 'candles',
-        granularity: granularity,
-        subscribe: 1
+      // Using Binance PAXGUSDT (Tokenized Gold representing physical gold xau/usd) via secure REST API which is rarely blocked
+      let res = await fetch(`https://api.binance.com/api/v3/klines?symbol=PAXGUSDT&interval=${tf}&limit=150`);
+      if (!res.ok) throw new Error('Network response failed');
+      
+      let json = await res.json();
+      candlesData = json.map(d => ({
+        time: Math.floor(d[0] / 1000),
+        open: parseFloat(d[1]),
+        high: parseFloat(d[2]),
+        low: parseFloat(d[3]),
+        close: parseFloat(d[4])
       }));
-    };
 
-    derivWS.onmessage = (event) => {
-      let data = JSON.parse(event.data);
-      isConnectedSuccessfully = true;
+      candleSeries.setData(candlesData);
+      ema20Series.setData(calculateEMA(candlesData, 20));
+      ema50Series.setData(calculateEMA(candlesData, 50));
+      analyzeStructure(candlesData);
 
-      if (data.error) {
-        statusEl.innerText = 'API Err: ' + data.error.message;
-        statusEl.className = 'error';
-        return;
-      }
-
-      if (data.msg_type === 'candles') {
-        candlesData = data.candles.map(c => ({
-          time: c.epoch, open: parseFloat(c.open), high: parseFloat(c.high),
-          low: parseFloat(c.low), close: parseFloat(c.close)
-        }));
-        candleSeries.setData(candlesData);
-        ema20Series.setData(calculateEMA(candlesData, 20));
-        ema50Series.setData(calculateEMA(candlesData, 50));
-        analyzeStructure(candlesData);
-
-        statusEl.innerText = 'LIVE · XAU/USD';
-        statusEl.className = 'live';
-      }
-
-      if (data.msg_type === 'ohlc') {
-        let c = data.ohlc;
-        let liveCandle = {
-          time: c.open_time, open: parseFloat(c.open), high: parseFloat(c.high),
-          low: parseFloat(c.low), close: parseFloat(c.close)
-        };
-        candleSeries.update(liveCandle);
-        if (candlesData.length > 0) {
-            if (candlesData[candlesData.length - 1].time === liveCandle.time) {
-                candlesData[candlesData.length - 1] = liveCandle;
-            } else {
-                candlesData.push(liveCandle);
-            }
-            analyzeStructure(candlesData);
-        }
-      }
-    };
-
-    derivWS.onerror = (err) => {
-      if(!isConnectedSuccessfully) handleConnectionFailure();
-    };
-    
-    derivWS.onclose = () => {
-      if(!isConnectedSuccessfully) handleConnectionFailure();
+      statusEl.innerText = 'LIVE · GOLD (PAXG)';
+      statusEl.className = 'live';
+    } catch (e) {
+      statusEl.innerText = 'Data Load Error';
+      statusEl.className = 'error';
     }
-  }
-
-  function handleConnectionFailure() {
-     currentEndpointIndex++;
-     if (currentEndpointIndex < wsEndpoints.length) {
-         setTimeout(() => connectToDeriv(currentTF), 1000);
-     } else {
-         statusEl.innerText = 'All Deriv Servers Blocked';
-         statusEl.className = 'error';
-     }
   }
 
   function analyzeStructure(candles) {
-    if (candles.length < 50) return;
+    if (candles.length < 30) return;
     let last = candles[candles.length - 1];
     let highList = candles.map(c => c.high);
     let lowList = candles.map(c => c.low);
 
-    let maxHigh = Math.max(...highList.slice(-30));
-    let minLow = Math.min(...lowList.slice(-30));
+    let maxHigh = Math.max(...highList.slice(-20));
+    let minLow = Math.min(...lowList.slice(-20));
     document.getElementById('bsl-val').innerText = maxHigh.toFixed(2);
     document.getElementById('ssl-val').innerText = minLow.toFixed(2);
 
     let totalBuyPressure = 0; let totalPressure = 0;
-    candles.slice(-20).forEach(c => {
+    candles.slice(-15).forEach(c => {
         let range = c.high - c.low;
         if (range > 0) { totalBuyPressure += (c.close - c.low); totalPressure += range; }
     });
@@ -373,14 +281,13 @@
       document.querySelectorAll('.tf-btn, .tf-btn-fs').forEach(b => b.classList.remove('active'));
       document.querySelectorAll(`[data-tf="${tf}"]`).forEach(b => b.classList.add('active'));
       document.getElementById('signal-tf').innerText = tf.toUpperCase() + ' Analysis';
-      currentEndpointIndex = 0; // Reset fallback counter on manual refresh
-      connectToDeriv(tf);
+      loadData(tf);
     });
   });
 
   setTimeout(() => {
     initChart();
-    connectToDeriv(currentTF);
+    loadData(currentTF);
   }, 300);
 </script>
 </body>
