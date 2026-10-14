@@ -1,0 +1,90 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Gold Engine</title>
+<script src="https://cdn.jsdelivr.net/npm/lightweight-charts@4.1.3/dist/lightweight-charts.standalone.production.js"></script>
+<style>
+:root{--bg:#0a0e16;--card:#111826;--ln:#1e2a40;--tx:#e8eef9;--mut:#7f8da8;--up:#22c55e;--dn:#ef4444;--bl:#3b82f6}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--tx);font:14px/1.4 system-ui,-apple-system,sans-serif;padding:env(safe-area-inset-top) 0 env(safe-area-inset-bottom)}
+header{display:flex;justify-content:space-between;align-items:baseline;padding:12px 12px 6px}
+h1{font-size:17px;margin:0}
+.n{color:var(--mut)}.up{color:var(--up)}.dn{color:var(--dn)}
+.tfs{display:flex;gap:6px;padding:0 12px 8px;overflow-x:auto}
+button{background:var(--card);color:var(--tx);border:1px solid var(--ln);border-radius:8px;padding:7px 13px;font:inherit}
+button.on{background:var(--bl);border-color:var(--bl)}
+button:focus-visible{outline:2px solid #fff}
+#chart{height:50vh;min-height:300px}
+.g{display:grid;grid-template-columns:1fr 1fr;gap:8px;padding:8px 12px}
+.c{background:var(--card);border:1px solid var(--ln);border-radius:10px;padding:10px 12px}
+.c h2{font-size:13px;color:var(--mut);margin:0 0 6px;font-weight:600}
+.w{grid-column:1/-1}
+.r{display:flex;justify-content:space-between;padding:2px 0}
+.bar{height:8px;border-radius:4px;background:var(--dn);overflow:hidden;margin:6px 0}
+.bar i{display:block;height:100%;background:var(--up)}
+#sig{font-size:24px;font-weight:700}
+@media(max-width:380px){.g{grid-template-columns:1fr}}
+</style></head><body>
+<header><h1>Gold Engine <span class="n" id="px"></span></h1><span class="n" id="st">Loading…</span></header>
+<div class="tfs" id="tfs"></div>
+<div id="chart"></div>
+<div class="g">
+ <div class="c w"><h2>Signal</h2><div id="sig">…</div><div id="lv"></div></div>
+ <div class="c"><h2>Trend by time frame</h2><div id="tr"></div></div>
+ <div class="c"><h2>Buyers vs sellers (candle pressure, last 20)</h2><div id="bs"></div><div class="bar"><i id="bb" style="width:50%"></i></div><div id="cf"></div></div>
+</div>
+<p class="n" style="padding:0 12px 24px;font-size:12px">Data: Deriv XAU/USD (frxXAUUSD), closed on weekends. Buyers/sellers is estimated from candle closes, not volume. Analysis aid only, no signal is guaranteed.</p>
+<script>
+const TF=['1m','5m','15m','30m','1h','4h'],GR={'1m':60,'5m':300,'15m':900,'30m':1800,'1h':3600,'4h':14400};
+let tf='5m',lines=[];
+const ch=LightweightCharts.createChart(document.getElementById('chart'),{autoSize:true,layout:{background:{color:'#0a0e16'},textColor:'#7f8da8'},grid:{vertLines:{color:'#131b2b'},horzLines:{color:'#131b2b'}},timeScale:{timeVisible:true,borderColor:'#1e2a40'},rightPriceScale:{borderColor:'#1e2a40'}});
+const cs=ch.addCandlestickSeries({upColor:'#22c55e',downColor:'#ef4444',borderVisible:false,wickUpColor:'#22c55e',wickDownColor:'#ef4444'});
+const o={priceLineVisible:false,lastValueVisible:false,lineWidth:2};
+const e1=ch.addLineSeries({...o,color:'#3b82f6'}),e2=ch.addLineSeries({...o,color:'#f59e0b'});
+let ws,wsP,pend={},rid=1;
+function wsOpen(){if(wsP)return wsP;wsP=new Promise((res,rej)=>{ws=new WebSocket('wss://ws.derivws.com/websockets/v3?app_id=1089');ws.onopen=res;ws.onerror=()=>{wsP=null;rej(new Error('ws'))};ws.onclose=()=>{wsP=null};ws.onmessage=m=>{const d=JSON.parse(m.data),p=pend[d.req_id];if(p){delete pend[d.req_id];d.error?p.rej(new Error(d.error.message)):p.res(d)}}});return wsP}
+async function kl(i,n=200){await wsOpen();const id=rid++;
+ const d=await new Promise((res,rej)=>{pend[id]={res,rej};ws.send(JSON.stringify({ticks_history:'frxXAUUSD',end:'latest',count:n,style:'candles',granularity:GR[i],req_id:id}));setTimeout(()=>{if(pend[id]){delete pend[id];rej(new Error('timeout'))}},10000)});
+ return d.candles.map(k=>({time:k.epoch,open:+k.open,high:+k.high,low:+k.low,close:+k.close}))}
+const ema=(a,p)=>{const k=2/(p+1);let e=a[0].close;return a.map(x=>({time:x.time,value:e=x.close*k+e*(1-k)}))};
+const atr=(a,p=14)=>{let s=0;for(let i=a.length-p;i<a.length;i++)s+=Math.max(a[i].high-a[i].low,Math.abs(a[i].high-a[i-1].close),Math.abs(a[i].low-a[i-1].close));return s/p};
+function trend(a){const f=ema(a,9),s=ema(a,21),n=a.length-1,d=f[n].value-s[n].value,m=atr(a)*.15;return d>m?'UP':d<-m?'DOWN':'NONE'}
+function structure(a){const mk=[];let sh=null,sl=null,dir=0;
+ for(let i=0;i<a.length;i++){const j=i-3;
+  if(j>=3){const w=a.slice(j-3,j+4);
+   if(a[j].high==Math.max(...w.map(x=>x.high)))sh={p:a[j].high,u:0};
+   if(a[j].low==Math.min(...w.map(x=>x.low)))sl={p:a[j].low,u:0}}
+  if(sh&&!sh.u&&a[i].close>sh.p){sh.u=1;mk.push({time:a[i].time,position:'belowBar',color:'#22c55e',shape:'arrowUp',text:dir<0?'CHoCH':'BOS'});dir=1}
+  if(sl&&!sl.u&&a[i].close<sl.p){sl.u=1;mk.push({time:a[i].time,position:'aboveBar',color:'#ef4444',shape:'arrowDown',text:dir>0?'CHoCH':'BOS'});dir=-1}}
+ return{mk,dir}}
+const cls=t=>t=='UP'?'up':t=='DOWN'?'dn':'n';
+async function run(){
+ try{
+  const a=await kl(tf),n=a.length-1,c=a[n].close;
+  cs.setData(a);const f=ema(a,9),s=ema(a,21);e1.setData(f);e2.setData(s);
+  const st=structure(a);cs.setMarkers(st.mk.slice(-12));
+  const trs={};await Promise.all(TF.map(async t=>{trs[t]=trend(t==tf?a:await kl(t,100))}));
+  const l=a.slice(-20),bs=100*l.reduce((x,y)=>x+(y.high>y.low?(y.close-y.low)/(y.high-y.low):.5),0)/l.length;
+  const U=Object.values(trs).filter(x=>x=='UP').length,D=Object.values(trs).filter(x=>x=='DOWN').length;
+  const buy=[f[n].value>s[n].value,st.dir>0,U>=4,bs>=52,c>s[n].value],sell=[f[n].value<s[n].value,st.dir<0,D>=4,bs<=48,c<s[n].value];
+  const bc=buy.filter(Boolean).length,sc=sell.filter(Boolean).length,side=bc==5?'BUY':sc==5?'SELL':null,cnt=Math.max(bc,sc);
+  const A=atr(a),R=A*1.5,sg=side=='BUY'?1:-1;
+  lines.forEach(x=>cs.removePriceLine(x));lines=[];
+  let lv='<span class="n">Waiting for all 5 confirmations to line up.</span>';
+  if(side){const L=[['SL',c-sg*R,'#ef4444'],['Entry',c,'#e8eef9'],['TP1',c+sg*R,'#22c55e'],['TP2',c+sg*2*R,'#22c55e'],['TP3',c+sg*3*R,'#22c55e']];
+   L.forEach(([t,p,k])=>lines.push(cs.createPriceLine({price:p,color:k,lineWidth:1,lineStyle:2,axisLabelVisible:true,title:t})));
+   lv=L.map(([t,p,k])=>`<div class="r"><span class="n">${t}</span><b>${p.toFixed(2)}</b></div>`).join('')}
+  sig.innerHTML=side?`<span class="${side=='BUY'?'up':'dn'}">${side}</span>`:'<span class="n">WAIT</span>';
+  document.getElementById('lv').innerHTML=lv;
+  document.getElementById('tr').innerHTML=TF.map(t=>`<div class="r"><span class="n">${t}</span><b class="${cls(trs[t])}">${trs[t]}</b></div>`).join('');
+  document.getElementById('bs').innerHTML=`<div class="r"><b class="up">Buyers ${bs.toFixed(0)}%</b><b class="dn">Sellers ${(100-bs).toFixed(0)}%</b></div>`;
+  document.getElementById('bb').style.width=bs+'%';
+  document.getElementById('cf').innerHTML=`<div class="r"><span class="n">Confirmations</span><b>${cnt}/5</b></div><div class="r"><span class="n">Structure</span><b class="${st.dir>0?'up':st.dir<0?'dn':'n'}">${st.dir>0?'Bullish':st.dir<0?'Bearish':'None'}</b></div>`;
+  document.getElementById('px').textContent=c.toFixed(2);
+  document.getElementById('st').textContent=(Date.now()/1000-a[n].time>3*GR[tf]?'Market closed, last data ':'Live ')+new Date().toLocaleTimeString();
+ }catch(e){document.getElementById('st').textContent='No data. Check connection.'}}
+const sig=document.getElementById('sig');
+document.getElementById('tfs').innerHTML=TF.map(t=>`<button data-t="${t}" class="${t==tf?'on':''}">${t}</button>`).join('');
+document.getElementById('tfs').onclick=e=>{const t=e.target.dataset.t;if(!t)return;tf=t;document.querySelectorAll('.tfs button').forEach(b=>b.classList.toggle('on',b.dataset.t==t));run()};
+run();setInterval(run,15000);
+</script></body></html>
